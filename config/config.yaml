@@ -1,0 +1,143 @@
+# Load Balancing SOM Configuration for Master Thesis
+# =====================================================
+
+# Server Configuration
+servers:
+  count: 8  # Number of servers to simulate
+  config:
+    cpu_cores: 8
+    memory_gb: 32
+    max_connections: 100
+    bandwidth_mbps: 1000
+
+# SOM Configuration  
+som:
+  grid_size: 10  # 10x10 SOM grid
+  learning_rate: 0.5  # Initial learning rate
+  initial_sigma: 2.0  # Initial neighborhood radius
+  neighborhood_function: 'gaussian'  # Neighborhood function type
+  training_interval: 100  # Retrain every N requests
+
+# Simulation Configuration
+simulation:
+  duration_seconds: 300  # 5 minutes simulation
+  request_rate: 10  # requests per second base rate
+  time_step_seconds: 0.1  # Simulation granularity
+  
+  # Request patterns for realistic workload
+  request_patterns:
+    - name: 'small_http'
+      weight: 0.6
+      size_mb_range: [0.1, 5.0]
+      connections_range: [1, 3]
+      duration_ms_range: [50, 500]
+      cpu_intensity_range: [0.5, 1.5]
+      memory_intensity_range: [0.5, 1.2]
+      type: 'http'
+      priority_distribution:
+        low: 0.1
+        normal: 0.8
+        high: 0.1
+    
+    - name: 'medium_api'
+      weight: 0.3
+      size_mb_range: [5.0, 50.0]
+      connections_range: [2, 8]
+      duration_ms_range: [200, 2000]
+      cpu_intensity_range: [1.0, 2.5]
+      memory_intensity_range: [1.0, 2.0]
+      type: 'api'
+      priority_distribution:
+        low: 0.05
+        normal: 0.7
+        high: 0.2
+        critical: 0.05
+    
+    - name: 'large_batch'
+      weight: 0.1
+      size_mb_range: [50.0, 200.0]
+      connections_range: [5, 15]
+      duration_ms_range: [1000, 5000]
+      cpu_intensity_range: [2.0, 4.0]
+      memory_intensity_range: [2.0, 3.5]
+      type: 'batch'
+      priority_distribution:
+        normal: 0.5
+        high: 0.3
+        critical: 0.2
+  
+  # Load variations for testing
+  load_variations: []  # Can add time-based load changes
+
+# Monitoring Configuration
+monitoring:
+  metrics_interval_seconds: 5  # How often to collect metrics
+  health_check_interval_seconds: 30  # Server health check frequency
+
+# Experiment Configuration
+experiments:
+  # Parameter tuning grid for SOM optimization
+  som_parameter_grid:
+    som_size: [6, 8, 10, 12]
+    learning_rate: [0.1, 0.3, 0.5, 0.7]
+    sigma: [1.0, 1.5, 2.0, 2.5]
+  
+  # Number of requests for parameter tuning (smaller for speed)
+  tuning_requests: 500
+  
+  # Number of requests for algorithm comparison
+  comparison_requests: 1000
+
+# Output Configuration
+output:
+  results_dir: "data/results"  # Where to save JSON results
+  plots_dir: "data/plots"      # Where to save visualization plots
+  
+  # File naming patterns
+  timestamp_format: "%Y%m%d_%H%M%S"
+  
+  # Plot configuration
+  plot_dpi: 300  # High quality for thesis
+  plot_format: "png"
+
+# Logging Configuration
+logging:
+  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
+  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
+  
+  # Log files
+  main_log: "logs/som_experiments.log"
+  error_log: "logs/errors.log"
+
+# Visualization Configuration
+visualization:
+  # SOM heatmap settings
+  heatmap_style: "whitegrid"
+  color_palettes:
+    som_features: ["Reds", "Blues", "Greens", "Purples"]
+    performance: "husl"
+  
+  # Plot sizes
+  figure_sizes:
+    som_analysis: [18, 12]
+    comparison: [15, 10]
+    individual: [12, 8]
+
+# Research Configuration (for thesis)
+research:
+  # Key research questions to address
+  questions:
+    - "How do SOM parameters affect load balancing performance?"
+    - "How does SOM compare to traditional algorithms?"
+    - "What is the optimal SOM configuration for different workloads?"
+  
+  # Metrics to focus on for thesis
+  key_metrics:
+    - "success_rate"
+    - "response_time_stats"
+    - "server_utilization_stats"
+    - "load_balance_quality"
+  
+  # Hypothesis testing
+  significance_level: 0.05
+  minimum_improvement_threshold: 5.0  # % improvement to be significant

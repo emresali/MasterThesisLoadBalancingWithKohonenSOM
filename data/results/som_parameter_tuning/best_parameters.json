@@ -1,0 +1,26 @@
+{
+  "som_size": [
+    8,
+    8
+  ],
+  "learning_rate": 0.3,
+  "sigma": 1.0,
+  "workload_pattern": "periodic",
+  "avg_response_time": 0.2981901182102541,
+  "avg_utilization": 0.6410614701753635,
+  "load_variance": 0.006589769656412881,
+  "rejection_rate": 0.745,
+  "load_balance_score": 0.07423924863003188,
+  "performance_score": 0.432575028100491,
+  "execution_time": 0.01763439178466797,
+  "load_distribution": [
+    58,
+    68,
+    53,
+    27,
+    61,
+    43,
+    52,
+    38
+  ]
+}
