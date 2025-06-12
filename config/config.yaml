@@ -1,143 +1,220 @@
-# Load Balancing SOM Configuration for Master Thesis
-# =====================================================
+# Kohonen Self-Organizing Maps Configuration
+# ==========================================
+# Based on Teuvo Kohonen's original algorithm
 
-# Server Configuration
+# Server Setup
 servers:
-  count: 8  # Number of servers to simulate
-  config:
-    cpu_cores: 8
-    memory_gb: 32
-    max_connections: 100
-    bandwidth_mbps: 1000
+  # Different system sizes to test
+  scenarios:
+    small:
+      count: 10
+      description: "Small cluster"
+    medium:
+      count: 25
+      description: "Medium data center"
+    large:
+      count: 50
+      description: "Large data center"
+    enterprise:
+      count: 100
+      description: "Enterprise-scale system"
+  
+  # Default for experiments
+  default_scenario: 'medium'
+  
+  # For ExperimentRunner compatibility
+  count: 25  # Default server count
 
-# SOM Configuration  
-som:
-  grid_size: 10  # 10x10 SOM grid
-  learning_rate: 0.5  # Initial learning rate
-  initial_sigma: 2.0  # Initial neighborhood radius
-  neighborhood_function: 'gaussian'  # Neighborhood function type
-  training_interval: 100  # Retrain every N requests
+# Kohonen Map (SOM) Specific Parameters
+som_parameters:
+  # Kohonen Map dimensions
+  map_dimensions:
+    small: 8    # 8x8 = 64 neurons
+    medium: 10  # 10x10 = 100 neurons
+    large: 15   # 15x15 = 225 neurons
+    
+  # Kohonen learning parameters
+  learning:
+    # Initial learning rate (α₀) - classically high
+    initial_alpha: 0.9
+    
+    # Minimum learning rate (α_min)
+    min_alpha: 0.01
+    
+    # Learning rate decay: α(t) = α₀ * exp(-t/λ)
+    decay_function: 'exponential'
+    decay_constant_lambda: 1000
+  
+  # Kohonen neighborhood function
+  neighborhood:
+    # Gaussian neighborhood (Kohonen standard)
+    function: 'gaussian'  # h(r,t) = exp(-r²/2σ²(t))
+    
+    # Initial neighborhood radius (σ₀)
+    initial_sigma: 3.0
+    
+    # Minimum radius (σ_min)
+    min_sigma: 0.5
+    
+    # Radius decay: σ(t) = σ₀ * exp(-t/λ_σ)
+    sigma_decay_constant: 500
+  
+  # Training
+  training:
+    # Initial training
+    initial_iterations: 1000  # Coarse ordering
+    
+    # Online learning
+    online_learning: true
+    retrain_interval: 100  # Every N requests
+    retrain_iterations: 50  # Fine-tuning
 
-# Simulation Configuration
+# Workload Patterns for Kohonen Evaluation
 simulation:
-  duration_seconds: 300  # 5 minutes simulation
-  request_rate: 10  # requests per second base rate
-  time_step_seconds: 0.1  # Simulation granularity
-  
-  # Request patterns for realistic workload
+  # Request patterns
   request_patterns:
-    - name: 'small_http'
+    - name: "small"
       weight: 0.6
-      size_mb_range: [0.1, 5.0]
-      connections_range: [1, 3]
-      duration_ms_range: [50, 500]
-      cpu_intensity_range: [0.5, 1.5]
-      memory_intensity_range: [0.5, 1.2]
-      type: 'http'
-      priority_distribution:
-        low: 0.1
-        normal: 0.8
-        high: 0.1
-    
-    - name: 'medium_api'
+      cpu_intensity_range: [1, 4]    # Will be divided by 10
+      memory_intensity_range: [1, 4]
+    - name: "medium"
       weight: 0.3
-      size_mb_range: [5.0, 50.0]
-      connections_range: [2, 8]
-      duration_ms_range: [200, 2000]
-      cpu_intensity_range: [1.0, 2.5]
-      memory_intensity_range: [1.0, 2.0]
-      type: 'api'
-      priority_distribution:
-        low: 0.05
-        normal: 0.7
-        high: 0.2
-        critical: 0.05
-    
-    - name: 'large_batch'
+      cpu_intensity_range: [3, 6]
+      memory_intensity_range: [3, 6]
+    - name: "large"
       weight: 0.1
-      size_mb_range: [50.0, 200.0]
-      connections_range: [5, 15]
-      duration_ms_range: [1000, 5000]
-      cpu_intensity_range: [2.0, 4.0]
-      memory_intensity_range: [2.0, 3.5]
-      type: 'batch'
-      priority_distribution:
-        normal: 0.5
-        high: 0.3
-        critical: 0.2
+      cpu_intensity_range: [6, 9]
+      memory_intensity_range: [6, 9]
   
-  # Load variations for testing
-  load_variations: []  # Can add time-based load changes
+  # Workload scenarios
+  workloads:
+    # Pattern 1: Uniform load (baseline)
+    uniform:
+      description: "Uniformly distributed requests"
+      request_rate: 50  # Requests/second
+      cpu_demand: [0.1, 0.4]
+      memory_demand: [0.1, 0.4]
+      
+    # Pattern 2: Hotspot scenario
+    hotspot:
+      description: "80% small, 20% large requests"
+      request_rate: 50
+      small_requests:
+        probability: 0.8
+        cpu_demand: [0.05, 0.2]
+        memory_demand: [0.05, 0.2]
+      large_requests:
+        probability: 0.2
+        cpu_demand: [0.6, 0.9]
+        memory_demand: [0.6, 0.9]
+    
+    # Pattern 3: Time-varying load
+    time_varying:
+      description: "Time-of-day dependent load"
+      phases:
+        - name: "Night"
+          duration_percent: 25
+          request_rate: 20
+          cpu_demand: [0.1, 0.3]
+        - name: "Morning peak"
+          duration_percent: 25
+          request_rate: 100
+          cpu_demand: [0.3, 0.7]
+        - name: "Noon"
+          duration_percent: 25
+          request_rate: 60
+          cpu_demand: [0.2, 0.5]
+        - name: "Evening peak"
+          duration_percent: 25
+          request_rate: 120
+          cpu_demand: [0.4, 0.8]
 
-# Monitoring Configuration
-monitoring:
-  metrics_interval_seconds: 5  # How often to collect metrics
-  health_check_interval_seconds: 30  # Server health check frequency
-
-# Experiment Configuration
+# Experiments
 experiments:
-  # Parameter tuning grid for SOM optimization
+  # Parameter grid for sweep
   som_parameter_grid:
     som_size: [6, 8, 10, 12]
     learning_rate: [0.1, 0.3, 0.5, 0.7]
-    sigma: [1.0, 1.5, 2.0, 2.5]
+    sigma: [1.0, 1.5, 2.0, 2.5, 3.0]
   
-  # Number of requests for parameter tuning (smaller for speed)
-  tuning_requests: 500
+  # Request counts for different experiment phases
+  tuning_requests: 200     # Quick evaluation during parameter tuning
+  comparison_requests: 1000 # Full evaluation for comparisons
   
-  # Number of requests for algorithm comparison
-  comparison_requests: 1000
+  # Scalability tests
+  scalability:
+    server_counts: [10, 25, 50, 75, 100]
+    request_loads: [100, 500, 1000, 5000, 10000]
+    measure: ['response_time', 'success_rate', 'load_distribution']
+  
+  # Adaptivity tests
+  adaptivity:
+    test_scenarios:
+      - "Sudden load spike"
+      - "Gradual increase"
+      - "Server failure"
+      - "Workload pattern change"
 
-# Output Configuration
-output:
-  results_dir: "data/results"  # Where to save JSON results
-  plots_dir: "data/plots"      # Where to save visualization plots
+# Metrics for Kohonen Evaluation
+metrics:
+  # Kohonen-specific metrics
+  som_metrics:
+    - neuron_utilization      # How many neurons are active?
+    - topology_preservation   # Topology preservation
+    - quantization_error      # Average quantization error
+    - learning_convergence    # Weight convergence
   
-  # File naming patterns
-  timestamp_format: "%Y%m%d_%H%M%S"
+  # Load balancing metrics
+  performance_metrics:
+    - request_success_rate
+    - server_load_variance    # Server load variance
+    - response_time_percentiles  # P50, P95, P99
+    - load_balance_index      # Jain's Fairness Index
   
-  # Plot configuration
-  plot_dpi: 300  # High quality for thesis
-  plot_format: "png"
+  # System metrics
+  system_metrics:
+    - cpu_utilization_per_server
+    - memory_utilization_per_server
+    - request_queue_length
+    - rejected_requests
 
-# Logging Configuration
-logging:
-  level: "INFO"  # DEBUG, INFO, WARNING, ERROR
-  format: "%(asctime)s - %(name)s - %(levelname)s - %(message)s"
-  
-  # Log files
-  main_log: "logs/som_experiments.log"
-  error_log: "logs/errors.log"
-
-# Visualization Configuration
+# Visualization
 visualization:
-  # SOM heatmap settings
-  heatmap_style: "whitegrid"
-  color_palettes:
-    som_features: ["Reds", "Blues", "Greens", "Purples"]
-    performance: "husl"
+  # Kohonen Map visualizations
+  som_plots:
+    - u_matrix              # Unified Distance Matrix
+    - hit_map               # Which neurons are how often active
+    - weight_positions      # 2D projection of weights
+    - learning_curves       # α(t) and σ(t) over time
   
-  # Plot sizes
-  figure_sizes:
-    som_analysis: [18, 12]
-    comparison: [15, 10]
-    individual: [12, 8]
+  # Performance plots
+  performance_plots:
+    - server_load_heatmap
+    - response_time_distribution
+    - success_rate_over_time
+    - load_variance_comparison
+  
+  # Comparison plots
+  comparison_plots:
+    - som_vs_roundrobin
+    - som_vs_leastconnections
+    - parameter_impact_matrix
 
-# Research Configuration (for thesis)
-research:
-  # Key research questions to address
-  questions:
-    - "How do SOM parameters affect load balancing performance?"
-    - "How does SOM compare to traditional algorithms?"
-    - "What is the optimal SOM configuration for different workloads?"
+# Output
+output:
+  # Results directory
+  results_dir: "data/results"
+  plots_dir: "data/plots"
   
-  # Metrics to focus on for thesis
-  key_metrics:
-    - "success_rate"
-    - "response_time_stats"
-    - "server_utilization_stats"
-    - "load_balance_quality"
+  # Export formats
+  export_formats:
+    - csv
+    - json
+    - latex_table  # For academic papers
   
-  # Hypothesis testing
-  significance_level: 0.05
-  minimum_improvement_threshold: 5.0  # % improvement to be significant
+  # Plot settings
+  plot_settings:
+    dpi: 300
+    format: 'png'  # Also supports 'pdf' for LaTeX
+    font_size: 12
+    style: 'scientific'

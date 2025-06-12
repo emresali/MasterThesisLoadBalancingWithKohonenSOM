@@ -1,221 +1,214 @@
-"""
-Complete SOM Visualization Suite
-- Basic visualizations (hexagonal, learning rate, analysis)
-- Parameter testing visualizations
-- Configuration comparison visualizations
-"""
 import numpy as np
 import matplotlib.pyplot as plt
+import seaborn as sns
 from matplotlib.patches import RegularPolygon
-import matplotlib.cm as cm
 from pathlib import Path
 from typing import Dict, List, Any, Optional
+import matplotlib.gridspec as gridspec
 
-# === BASIC VISUALIZATIONS ===
+plt.style.use('seaborn-v0_8-paper')
+sns.set_palette("husl")
 
-def create_full_visualization(balancer, save_dir="data/plots"):
-    """Create complete SOM visualization including learning rate"""
-    save_dir = Path(save_dir)
-    save_dir.mkdir(parents=True, exist_ok=True)
+class SOMVisualizer:
+    def __init__(self, save_dir: str = "data/plots", dpi: int = 300):
+        self.save_dir = Path(save_dir)
+        self.save_dir.mkdir(parents=True, exist_ok=True)
+        self.dpi = dpi
+        
+    def create_comprehensive_analysis(self, balancer, filename: str = "som_analysis.png"):
+        fig = plt.figure(figsize=(12, 8), constrained_layout=True)
+        gs = gridspec.GridSpec(3, 3, figure=fig)
+        
+        ax_hex = fig.add_subplot(gs[0:2, 0:2])
+        self._plot_hexagonal_som(ax_hex, balancer)
+        
+        ax_lr = fig.add_subplot(gs[0, 2])
+        self._plot_learning_rate(ax_lr, balancer)
+        
+        ax_util = fig.add_subplot(gs[1, 2])
+        self._plot_server_utilization(ax_util, balancer)
+        
+        ax_neuron = fig.add_subplot(gs[2, 0])
+        self._plot_neuron_distribution(ax_neuron, balancer)
+        
+        ax_balance = fig.add_subplot(gs[2, 1])
+        self._plot_load_balance(ax_balance, balancer)
+        
+        ax_metrics = fig.add_subplot(gs[2, 2])
+        self._plot_key_metrics(ax_metrics, balancer)
+        
+        save_path = self.save_dir / filename
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        
+        plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+        plt.close()
     
-    create_hexagonal_plot(balancer, save_dir / "som_hex.png")
-    create_learning_rate_plot(balancer, save_dir / "learning_rate.png")
-    create_analysis_plot(balancer, save_dir / "som_analysis.png")
-
-def create_hexagonal_plot(balancer, save_path):
-    """Create hexagonal SOM visualization"""
-    size = balancer.som.get_weights().shape[0]
-    weights = balancer.get_weights()
-   
-    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(12, 6))
-   
-    # U-Matrix
-    u_matrix = calculate_umatrix(weights)
-    plot_hex_grid(ax1, size, u_matrix, "U-Matrix", cm.viridis)
-   
-    # Hits
-    hits_matrix = np.zeros((size, size))
-    for (i, j), count in balancer.get_hits().items():
-        hits_matrix[i, j] = count
-    plot_hex_grid(ax2, size, hits_matrix, "Neuron Hits", cm.hot)
-   
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-
-def create_learning_rate_plot(balancer, save_path):
-    """Plot adaptive learning rate over time"""
-    history = balancer.get_learning_history()
-    if not history:
-        return
+    def _plot_hexagonal_som(self, ax, balancer):
+        size = balancer.som_size
+        weights = balancer.get_weights()
+        hits = balancer.get_hits()
+        
+        u_matrix = self._calculate_umatrix(weights)
+        
+        for i in range(size):
+            for j in range(size):
+                x = j * 1.5
+                y = i * np.sqrt(3)
+                if i % 2 == 1:
+                    x += 0.75
+                
+                val = u_matrix[i, j]
+                normalized_val = (val - u_matrix.min()) / (u_matrix.max() - u_matrix.min() + 1e-8)
+                
+                hit_count = hits.get((i, j), 0)
+                radius = 0.4 + 0.5 * min(hit_count / max(hits.values() or [1]), 1.0)
+                
+                hex = RegularPolygon((x, y), 6, radius=radius,
+                                   facecolor=plt.cm.viridis(normalized_val),
+                                   edgecolor='white', linewidth=0.5)
+                ax.add_patch(hex)
+                
+                if hit_count > 0:
+                    ax.text(x, y, str(hit_count), ha='center', va='center',
+                           fontsize=6, color='white' if normalized_val > 0.5 else 'black')
+        
+        ax.set_xlim(-1, size * 1.5)
+        ax.set_ylim(-1, size * np.sqrt(3))
+        ax.set_aspect('equal')
+        ax.axis('off')
+        ax.set_title('SOM Topology (U-Matrix + Hits)', fontsize=10, fontweight='bold')
     
-    iterations, rates = zip(*history)
-    
-    fig, ax = plt.subplots(figsize=(10, 6))
-    ax.plot(iterations, rates, 'b-', linewidth=2, label='Learning Rate')
-    ax.axhline(y=balancer.min_learning_rate, color='r', linestyle='--', 
-               label=f'Min LR = {balancer.min_learning_rate}')
-    
-    # Markiere Retraining-Punkte
-    retrain_points = [i for i, _ in history if i % 100 == 0 and i > 0]
-    retrain_rates = [r for i, r in history if i % 100 == 0 and i > 0]
-    if retrain_points:
-        ax.scatter(retrain_points, retrain_rates, color='green', 
-                  s=50, zorder=5, label='Retraining Points')
-    
-    ax.set_xlabel('Iterationen')
-    ax.set_ylabel('Lernrate')
-    ax.set_title('Adaptive Learning Rate Verlauf')
-    ax.grid(True, alpha=0.3)
-    ax.legend()
-    ax.set_yscale('log')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-
-def create_analysis_plot(balancer, save_path):
-    """Combined analysis plot"""
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(15, 12))
-    
-    # 1. U-Matrix
-    weights = balancer.get_weights()
-    u_matrix = calculate_umatrix(weights)
-    im1 = ax1.imshow(u_matrix, cmap='viridis')
-    ax1.set_title('U-Matrix (Distance Map)')
-    plt.colorbar(im1, ax=ax1)
-    
-    # 2. Hit Map
-    size = weights.shape[0]
-    hits_matrix = np.zeros((size, size))
-    for (i, j), count in balancer.get_hits().items():
-        hits_matrix[i, j] = count
-    im2 = ax2.imshow(hits_matrix, cmap='hot')
-    ax2.set_title('Neuron Activation Frequency')
-    plt.colorbar(im2, ax=ax2)
-    
-    # 3. Learning Rate Curve
-    history = balancer.get_learning_history()
-    if history:
+    def _plot_learning_rate(self, ax, balancer):
+        history = balancer.get_learning_history()
+        if not history:
+            return
+        
         iterations, rates = zip(*history)
-        ax3.plot(iterations, rates, 'b-', linewidth=2)
-        ax3.set_xlabel('Iterationen')
-        ax3.set_ylabel('Learning Rate')
-        ax3.set_title('Adaptive Learning Rate')
-        ax3.grid(True, alpha=0.3)
-        ax3.set_yscale('log')
+        ax.semilogy(iterations, rates, 'b-', linewidth=2)
+        ax.axhline(y=balancer.min_learning_rate, color='r', linestyle='--', 
+                   linewidth=1, alpha=0.7)
+        ax.set_xlabel('Iteration', fontsize=8)
+        ax.set_ylabel('Learning Rate', fontsize=8)
+        ax.set_title('Adaptive α(t)', fontsize=10, fontweight='bold')
+        ax.grid(True, alpha=0.3)
+        ax.tick_params(axis='both', labelsize=7)
     
-    # 4. SOM Statistics
-    ax4.axis('off')
-    stats_text = f"""
-    SOM Statistics:
-    
-    Total Requests: {balancer.request_count}
-    Current LR: {balancer.get_current_lr():.6f}
-    Initial LR: {balancer.initial_learning_rate}
-    Min LR: {balancer.min_learning_rate}
-    Decay Constant: {balancer.decay_constant}
-    Current Iteration: {balancer.current_iteration}
-    
-    Active Neurons: {len(balancer.get_hits())}
-    Most Active: {max(balancer.get_hits().items(), key=lambda x: x[1]) if balancer.get_hits() else 'None'}
-    """
-    ax4.text(0.1, 0.9, stats_text, transform=ax4.transAxes, 
-             verticalalignment='top', fontfamily='monospace')
-    
-    plt.tight_layout()
-    plt.savefig(save_path, dpi=150)
-    plt.close()
-
-# === PARAMETER TESTING VISUALIZATIONS ===
-
-def create_parameter_analysis_plot(test_results: Dict[str, List[Dict]], save_path: Optional[str] = None):
-    """Create parameter analysis visualization from test results"""
-    if save_path is None:
-        save_path = 'data/plots/kohonen_parameters.png'
-    
-    fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
-    
-    # 1. Learning rate effect
-    if 'learning_rates' in test_results:
-        rates, success, load_std = [], [], []
-        for r in test_results['learning_rates']:
-            rates.append(r['param'])
-            success.append(r['success'])
-            load_std.append(r['load_std'])
+    def _plot_server_utilization(self, ax, balancer):
+        utils = [s.utilization * 100 for s in balancer.servers]
+        server_ids = [s.id for s in balancer.servers]
         
-        ax1.plot(rates, success, 'o-', markersize=8, linewidth=2)
-        ax1.set_xlabel('Learning Rate (η)')
-        ax1.set_ylabel('Success Rate (%)')
-        ax1.set_title('Learning Rate Effect on Success')
-        ax1.grid(True, alpha=0.3)
-    
-    # 2. Map size effect
-    if 'map_sizes' in test_results:
-        sizes, neurons, success = [], [], []
-        for s in test_results['map_sizes']:
-            sizes.append(f"{s['param']}×{s['param']}")
-            neurons.append(s['active_neurons'] / (s['param']**2) * 100)
-            success.append(s['success'])
+        bars = ax.bar(server_ids, utils, color=sns.color_palette("husl", len(utils)))
         
-        ax2.bar(sizes, neurons, alpha=0.7)
-        ax2_twin = ax2.twinx()
-        ax2_twin.plot(sizes, success, 'ro-', markersize=8)
-        ax2.set_xlabel('Map Size')
-        ax2.set_ylabel('Active Neurons (%)', color='b')
-        ax2_twin.set_ylabel('Success Rate (%)', color='r')
-        ax2.set_title('Map Size Effects')
-        ax2.grid(True, alpha=0.3, axis='y')
-    
-    # 3. Neighborhood radius effect
-    if 'sigmas' in test_results:
-        sigmas, success, load_std = [], [], []
-        for s in test_results['sigmas']:
-            sigmas.append(s['param'])
-            success.append(s['success'])
-            load_std.append(s['load_std'])
+        mean_util = np.mean(utils)
+        ax.axhline(y=mean_util, color='red', linestyle='--', linewidth=2, alpha=0.7)
         
-        ax3.plot(sigmas, load_std, 'go-', markersize=8, linewidth=2)
-        ax3.set_xlabel('Neighborhood Radius (σ)')
-        ax3.set_ylabel('Load Standard Deviation')
-        ax3.set_title('Neighborhood Effect on Load Balance')
-        ax3.grid(True, alpha=0.3)
-        ax3.invert_yaxis()  # Lower is better
+        ax.set_xlabel('Server ID', fontsize=8)
+        ax.set_ylabel('Utilization (%)', fontsize=8)
+        ax.set_title('Server Load Distribution', fontsize=10, fontweight='bold')
+        ax.set_ylim(0, 100)
+        ax.tick_params(axis='both', labelsize=7)
+        
+        ax.text(0.95, 0.95, f'σ = {np.std(utils):.1f}%', 
+                transform=ax.transAxes, ha='right', va='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                fontsize=8)
     
-    # 4. Summary
-    ax4.axis('off')
-    summary = "Kohonen SOM Parameter Guidelines:\n\n"
+    def _plot_neuron_distribution(self, ax, balancer):
+        hits_values = list(balancer.get_hits().values())
+        if not hits_values:
+            return
+        
+        ax.hist(hits_values, bins=20, color='skyblue', edgecolor='black', alpha=0.7)
+        ax.set_xlabel('Hit Count', fontsize=8)
+        ax.set_ylabel('# Neurons', fontsize=8)
+        ax.set_title('Neuron Activity', fontsize=10, fontweight='bold')
+        ax.tick_params(axis='both', labelsize=7)
     
-    if 'learning_rates' in test_results:
-        best_lr = max(test_results['learning_rates'], key=lambda x: x['success'])
-        summary += f"• Best Learning Rate: η = {best_lr['param']}\n"
-        summary += f"  (Success: {best_lr['success']:.1f}%)\n\n"
+    def _plot_load_balance(self, ax, balancer):
+        metrics = balancer.get_metrics()
+        utils = [s.utilization for s in balancer.servers]
+        
+        # Load distribution over time would be more useful
+        ax.boxplot(utils, vert=True, patch_artist=True,
+                   boxprops=dict(facecolor='lightblue', alpha=0.7),
+                   medianprops=dict(color='red', linewidth=2))
+        
+        ax.set_ylabel('Server Utilization', fontsize=8)
+        ax.set_title('Load Distribution', fontsize=10, fontweight='bold')
+        ax.set_xticklabels(['All Servers'])
+        ax.grid(axis='y', alpha=0.3)
+        
+        # Add statistics text
+        ax.text(0.95, 0.95, f'Balance Score: {metrics["load_balance_score"]:.3f}\nStd Dev: {np.std(utils):.3f}', 
+                transform=ax.transAxes, ha='right', va='top',
+                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
+                fontsize=7)
     
-    if 'map_sizes' in test_results:
-        best_size = max(test_results['map_sizes'], key=lambda x: x['success'])
-        summary += f"• Best Map Size: {best_size['param']}×{best_size['param']}\n"
-        summary += f"  (Success: {best_size['success']:.1f}%)\n\n"
+    def _plot_key_metrics(self, ax, balancer):
+        metrics = balancer.get_metrics()
+        
+        ax.axis('off')
+        text = f"""Performance Metrics:
+        
+Requests: {metrics['request_count']}
+Active Neurons: {metrics['active_neurons']}/{metrics['total_neurons']}
+Neuron Usage: {metrics['neuron_usage_rate']:.1f}%
+Load Balance: {metrics['load_balance_score']:.3f}
+Current α: {metrics['current_lr']:.4f}
+        """
+        
+        ax.text(0.1, 0.9, text, transform=ax.transAxes, 
+                verticalalignment='top', fontfamily='monospace',
+                fontsize=8, bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
     
-    if 'sigmas' in test_results:
-        best_sigma = min(test_results['sigmas'], key=lambda x: x['load_std'])
-        summary += f"• Best Neighborhood: σ = {best_sigma['param']}\n"
-        summary += f"  (Load STD: {best_sigma['load_std']:.3f})\n"
-    
-    ax4.text(0.1, 0.9, summary, transform=ax4.transAxes,
-             verticalalignment='top', fontsize=11, fontfamily='monospace',
-             bbox=dict(boxstyle='round', facecolor='lightblue', alpha=0.8))
-    
-    plt.suptitle('Kohonen (SOM) Parameter Analysis', fontsize=14, fontweight='bold')
-    plt.tight_layout()
-    
-    Path(save_path).parent.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path, dpi=150, bbox_inches='tight')
-    plt.close()
+    def _calculate_umatrix(self, weights):
+        size = weights.shape[0]
+        u_matrix = np.zeros((size, size))
+        
+        for i in range(size):
+            for j in range(size):
+                neighbors = []
+                for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
+                    ni, nj = i + di, j + dj
+                    if 0 <= ni < size and 0 <= nj < size:
+                        dist = np.linalg.norm(weights[i,j] - weights[ni,nj])
+                        neighbors.append(dist)
+                u_matrix[i,j] = np.mean(neighbors) if neighbors else 0
+        
+        return u_matrix
 
-# === COMPARISON VISUALIZATIONS ===
+    
+    def create_comparison_matrix(self, results: Dict[str, Dict], filename: str = "comparison_matrix.png"):
+        configs = list(results.keys())
+        metrics = ['success_rate', 'load_std', 'neuron_usage', 'response_time']
+        
+        matrix = np.zeros((len(configs), len(metrics)))
+        for i, config in enumerate(configs):
+            for j, metric in enumerate(metrics):
+                if metric in results[config]:
+                    matrix[i, j] = results[config][metric]
+        
+        for j in range(len(metrics)):
+            col = matrix[:, j]
+            if col.max() > col.min():
+                matrix[:, j] = (col - col.min()) / (col.max() - col.min())
+        
+        fig, ax = plt.subplots(figsize=(8, 6))
+        sns.heatmap(matrix, annot=True, fmt='.2f', cmap='YlOrRd',
+                    xticklabels=metrics, yticklabels=configs,
+                    cbar_kws={'label': 'Normalized Score'})
+        
+        ax.set_title('Configuration Performance Matrix', fontsize=12, fontweight='bold')
+        plt.tight_layout()
+        
+        save_path = self.save_dir / filename
+        save_path.parent.mkdir(parents=True, exist_ok=True)
+        plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+        plt.close()
 
-def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Dict[str, Any]]):
-    """Create comparison visualizations between different SOM configurations"""
+def create_configuration_comparison(results: Dict[str, Dict[str, Any]], configs: List[Dict[str, Any]]):
+    save_dir = Path("data/plots")
+    save_dir.mkdir(parents=True, exist_ok=True)
     
     fig, axes = plt.subplots(2, 3, figsize=(15, 10))
     fig.suptitle('SOM Configuration Comparison', fontsize=16, fontweight='bold')
@@ -224,7 +217,6 @@ def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Di
     config_names = [c['name'] for c in configs]
     colors = ['blue', 'red', 'green', 'orange'][:len(configs)]
     
-    # Helper function for bar plots
     def plot_bars(ax, metric, ylabel, title):
         x = np.arange(len(workloads))
         width = 0.8 / len(configs)
@@ -240,10 +232,8 @@ def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Di
         ax.legend()
         ax.grid(axis='y', alpha=0.3)
     
-    # 1. Success Rate
     plot_bars(axes[0, 0], 'success_rate', 'Success Rate (%)', 'Success Rate by Workload')
     
-    # 2. Load Balance Quality
     ax = axes[0, 1]
     for i, name in enumerate(config_names):
         values = [results[name][w]['load_std'] for w in workloads]
@@ -253,10 +243,8 @@ def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Di
     ax.legend()
     ax.grid(alpha=0.3)
     
-    # 3. Neuron Usage
     plot_bars(axes[0, 2], 'neuron_usage', 'Neuron Usage (%)', 'SOM Neuron Utilization')
     
-    # 4-5. Load Evolution
     for idx, (workload, ylabel) in enumerate([('uniform', 'Load STD'), ('bursty', 'Average Load')]):
         ax = axes[1, idx]
         for i, name in enumerate(config_names):
@@ -270,11 +258,9 @@ def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Di
         ax.legend()
         ax.grid(alpha=0.3)
     
-    # 6. Summary
     ax = axes[1, 2]
     ax.axis('off')
     
-    # Calculate scores
     scores = {}
     for name in config_names:
         score = sum(
@@ -285,7 +271,6 @@ def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Di
         ) / len(workloads)
         scores[name] = score
     
-    # Summary text
     summary = "Configuration Summary:\n\n"
     for config in configs:
         name = config['name']
@@ -302,53 +287,9 @@ def create_comparison_plots(results: Dict[str, Dict[str, Any]], configs: List[Di
             bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
     
     plt.tight_layout()
-    save_path = Path("data/plots/comparison")
-    save_path.mkdir(parents=True, exist_ok=True)
-    plt.savefig(save_path / 'configuration_comparison.png', dpi=300, bbox_inches='tight')
+    plt.savefig(save_dir / 'configuration_comparison.png', dpi=300, bbox_inches='tight')
     plt.close()
 
-# === HELPER FUNCTIONS ===
-
-def plot_hex_grid(ax, size, values, title, cmap):
-    """Plot hexagonal grid"""
-    vmin, vmax = values.min(), values.max() or 1
-   
-    for i in range(size):
-        for j in range(size):
-            x = j * 1.5
-            y = i * np.sqrt(3)
-            if i % 2 == 1:
-                x += 0.75
-           
-            val = (values[i, j] - vmin) / (vmax - vmin) if vmax > vmin else 0
-            hex = RegularPolygon((x, y), 6, radius=0.9,
-                               facecolor=cmap(val),
-                               edgecolor='black')
-            ax.add_patch(hex)
-           
-            if values[i, j] > 0:
-                ax.text(x, y, f'{values[i, j]:.1f}',
-                       ha='center', va='center', fontsize=8)
-   
-    ax.set_xlim(-1, size * 1.5)
-    ax.set_ylim(-1, size * np.sqrt(3))
-    ax.set_aspect('equal')
-    ax.axis('off')
-    ax.set_title(title)
-
-def calculate_umatrix(weights):
-    """Calculate U-Matrix"""
-    size = weights.shape[0]
-    u_matrix = np.zeros((size, size))
-   
-    for i in range(size):
-        for j in range(size):
-            neighbors = []
-            for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
-                ni, nj = i + di, j + dj
-                if 0 <= ni < size and 0 <= nj < size:
-                    dist = np.linalg.norm(weights[i,j] - weights[ni,nj])
-                    neighbors.append(dist)
-            u_matrix[i,j] = np.mean(neighbors) if neighbors else 0
-   
-    return u_matrix
+def create_quick_analysis(balancer, prefix: str = "analysis"):
+    viz = SOMVisualizer()
+    viz.create_comprehensive_analysis(balancer, f"{prefix}_results.png")
