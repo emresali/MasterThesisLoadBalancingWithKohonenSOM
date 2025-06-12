@@ -1,0 +1,8 @@
+{
+  "som_size": 8.0,
+  "learning_rate": 0.5,
+  "sigma": 1.0,
+  "success_rate": 7.000000000000001,
+  "load_std": 0.05835686621106231,
+  "avg_load": 0.9108261815841242
+}
