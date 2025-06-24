@@ -20,51 +20,38 @@ vms:
 
 # Kohonen SOM Parameters
 som_parameters:
-  # Initial learning rate
   initial_learning_rate: 0.9
-  
-  # Neighborhood radius
   sigma: 2.0
-  
-  # Neighbor activation parameters (KEY FOR YOUR THESIS)
   neighbor_influence: 0.3      # How much neighbors get activated
   load_spread_factor: 0.5      # Load spreading aggressiveness
-  
-  # Training
   initial_training_samples: 100
   initial_training_iterations: 500
 
 # Workload Configuration
 workload:
-  # Request patterns for response time analysis
   request_patterns:
     light:
       cpu_demand: [0.05, 0.15]
       memory_demand: [0.05, 0.15]
       processing_time: [5, 15]    # ms
       probability: 0.5
-    
     medium:
       cpu_demand: [0.2, 0.4]
       memory_demand: [0.2, 0.4]
       processing_time: [20, 40]   # ms
       probability: 0.35
-    
     heavy:
       cpu_demand: [0.5, 0.8]
       memory_demand: [0.5, 0.8]
       processing_time: [50, 100]  # ms
       probability: 0.15
   
-  # Load scenarios for testing
   scenarios:
-    # Scenario 1: Steady state
     steady_state:
       duration_steps: 1000
-      request_rate: 50    # requests per step
+      request_rate: 50
       description: "Constant load for baseline"
     
-    # Scenario 2: Hotspot (tests neighborhood activation)
     hotspot:
       duration_steps: 500
       phases:
@@ -74,12 +61,11 @@ workload:
         - name: "hotspot_formation"
           steps: 200
           request_rate: 100
-          target_region: [3, 5, 3, 5]  # Focus load on center
+          target_region: [3, 5, 3, 5]
         - name: "recovery"
           steps: 200
           request_rate: 50
     
-    # Scenario 3: Wave pattern (tests communication)
     wave_pattern:
       duration_steps: 600
       wave_speed: 0.1
@@ -88,19 +74,14 @@ workload:
 
 # Response Time Analysis
 response_time:
-  # Queue simulation parameters
   queue:
     max_length: 10
-    processing_penalty_per_item: 10  # ms per queued request
-  
-  # SLA thresholds
+    processing_penalty_per_item: 10  # ms
   sla_thresholds:
-    excellent: 50      # ms
-    good: 100         # ms
-    acceptable: 200   # ms
-    violation: 500    # ms
-  
-  # Metrics to track
+    excellent: 50
+    good: 100
+    acceptable: 200
+    violation: 500
   metrics:
     - avg_response_time
     - p50_response_time
@@ -110,81 +91,60 @@ response_time:
 
 # Neighborhood Communication Analysis
 communication:
-  # Activation propagation
   activation:
-    decay_rate: 0.9              # How fast activation decays
-    propagation_radius: 2        # How far activation spreads
-    threshold: 0.1               # Minimum activation level
-  
-  # Load shift tracking
+    decay_rate: 0.9
+    propagation_radius: 2
+    threshold: 0.1
   load_shifts:
     track_reasons: true
     categories:
-      - overload_spreading       # Primary VM overloaded
-      - activation_based         # Neighbor activation triggered
-      - queue_overflow          # Queue length exceeded
-  
-  # Communication patterns to analyze
+      - overload_spreading
+      - activation_based
+      - queue_overflow
   patterns:
-    - direct_shifts             # 1-hop load shifts
-    - cascading_shifts         # Multi-hop propagation
-    - cluster_formation        # VMs working together
+    - direct_shifts
+    - cascading_shifts
+    - cluster_formation
 
 # Experiments
 experiments:
-  # Parameter sweep for optimal configuration
   parameter_study:
     neighbor_influence: [0.1, 0.2, 0.3, 0.4, 0.5]
     load_spread_factor: [0.3, 0.5, 0.7, 0.9]
     sigma: [1.0, 1.5, 2.0, 2.5, 3.0]
-    
-  # Response time comparison
-  baseline_comparison:
-    algorithms:
-      - som_with_activation      # Your approach
-      - som_without_activation   # Standard SOM
-      - round_robin             # Baseline
-      - least_connections       # Traditional LB
-    
+
+  activation_comparison:
+    modes:
+      - with_activation
+      - without_activation
     metrics_to_compare:
       - avg_response_time
       - p95_response_time
       - load_variance
       - communication_overhead
-  
-  # Scalability tests
+
   scalability:
-    vm_counts: [16, 64, 144, 256]  # 4x4, 8x8, 12x12, 16x16
+    vm_counts: [16, 64, 144, 256]
     load_levels: [100, 500, 1000, 2000]
     measure_communication_cost: true
 
 # Visualization
 visualization:
-  # Real-time animations
   animations:
     load_shift_animation:
       enabled: true
       fps: 5
       show_activation_waves: true
       show_load_arrows: true
-    
-  # Analysis plots
   plots:
-    # Response time analysis
     - response_time_evolution
     - response_time_heatmap
     - sla_compliance_chart
-    
-    # Communication analysis
     - activation_propagation_map
     - load_shift_frequency_matrix
     - neighbor_correlation_plot
-    
-    # Performance comparison
     - algorithm_comparison_boxplot
     - scalability_curves
-    
-  # Export settings
   export:
     format: 'png'
     dpi: 300
@@ -192,43 +152,30 @@ visualization:
 
 # Metrics Collection
 metrics:
-  # Response time metrics
-  response_time_buckets: [10, 25, 50, 100, 200, 500, 1000]  # ms
-  
-  # Communication metrics
+  response_time_buckets: [10, 25, 50, 100, 200, 500, 1000]
   communication:
     - total_load_shifts
     - avg_shift_distance
     - activation_spread_rate
     - neighbor_collaboration_score
-  
-  # System metrics
   system:
     - cpu_utilization_variance
     - memory_utilization_variance
     - queue_length_distribution
     - overloaded_vm_percentage
-  
-  # Collection interval
-  collection_interval: 10  # steps
+  collection_interval: 10
 
 # Output Configuration
 output:
   results_dir: "results/response_time_analysis"
-  
-  # Structured output for thesis
   reports:
     - summary_statistics.json
     - response_time_analysis.csv
     - communication_patterns.csv
     - parameter_impact_matrix.csv
-  
-  # LaTeX tables
   latex_tables:
     enabled: true
     precision: 3
-    
-  # Logging
   logging:
     level: INFO
     log_communication_events: true
