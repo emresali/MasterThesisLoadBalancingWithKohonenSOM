@@ -2,7 +2,7 @@ import numpy as np
 from minisom import MiniSom
 from dataclasses import dataclass, field
 from typing import List, Optional, Tuple, Dict
-from collections import deque, defaultdict
+from collections import defaultdict, deque
 import time
 
 @dataclass
@@ -10,253 +10,315 @@ class Request:
     id: int
     cpu_demand: float
     memory_demand: float
+    processing_time: float  # Expected processing time in ms
     arrival_time: float = field(default_factory=time.time)
     
     def get_features(self) -> np.ndarray:
         return np.array([self.cpu_demand, self.memory_demand])
-    
-    @property
-    def size_category(self) -> str:
-        total_demand = self.cpu_demand + self.memory_demand
-        if total_demand < 0.4:
-            return 'small'
-        elif total_demand < 1.0:
-            return 'medium'
-        else:
-            return 'large'
 
-@dataclass
-class Server:
+@dataclass 
+class VirtualMachine:
     id: int
+    som_position: Tuple[int, int]
     cpu_usage: float = 0.0
     memory_usage: float = 0.0
-    request_count: int = 0
-    total_processing_time: float = 0.0
-    handled_request_types: Dict[str, int] = field(default_factory=lambda: defaultdict(int))
+    
+    # Queue and response time tracking
+    request_queue: deque = field(default_factory=deque)
+    processing_requests: List[Request] = field(default_factory=list)
+    total_response_time: float = 0.0
+    completed_requests: int = 0
+    
+    # Neighbor awareness
+    activation_level: float = 0.0  # How active this VM is due to neighbor load
+    neighbor_load_factor: float = 0.0  # Influence from overloaded neighbors
     
     @property
     def utilization(self) -> float:
         return (self.cpu_usage + self.memory_usage) / 2.0
     
     @property
+    def queue_length(self) -> int:
+        return len(self.request_queue)
+    
+    @property
     def avg_response_time(self) -> float:
-        return self.total_processing_time / max(1, self.request_count)
+        return self.total_response_time / max(1, self.completed_requests)
     
-    def can_handle(self, req: Request) -> bool:
-        return (self.cpu_usage + req.cpu_demand <= 1.0 and
-                self.memory_usage + req.memory_demand <= 1.0)
+    def is_overloaded(self) -> bool:
+        return self.utilization > 0.8 or self.queue_length > 5
     
-    def allocate(self, req: Request):
-        self.cpu_usage += req.cpu_demand
-        self.memory_usage += req.memory_demand
-        self.request_count += 1
-        self.handled_request_types[req.size_category] += 1
+    def can_accept(self, req: Request) -> bool:
+        # Consider both resources and queue length
+        future_cpu = self.cpu_usage + req.cpu_demand
+        future_mem = self.memory_usage + req.memory_demand
+        return future_cpu <= 1.0 and future_mem <= 1.0 and self.queue_length < 10
 
 class SOMLoadBalancer:
     def __init__(self, 
-                 servers: List[Server], 
-                 som_size: int = 10,
+                 som_size: int = 8,
                  initial_learning_rate: float = 0.9,
-                 min_learning_rate: float = 0.01,
-                 decay_constant: float = 1000,
                  sigma: float = 2.0,
-                 retrain_interval: int = 100,
-                 window_size: int = 200,
-                 enable_specialization: bool = True):
+                 neighbor_influence: float = 0.3,
+                 load_spread_factor: float = 0.5):
         
-        self.servers = servers
         self.som_size = som_size
-        self.enable_specialization = enable_specialization
+        self.neighbor_influence = neighbor_influence
+        self.load_spread_factor = load_spread_factor
         
-        self.initial_learning_rate = initial_learning_rate
-        self.min_learning_rate = min_learning_rate
-        self.decay_constant = decay_constant
-        self.current_iteration = 0
-        self.learning_rate_history = []
-        
-        self.retrain_interval = retrain_interval
-        self.window_size = window_size
-        self.training_data = deque(maxlen=window_size)
-        
-        current_lr = self._get_current_learning_rate()
+        # Initialize SOM
         self.som = MiniSom(som_size, som_size, 2,
                           sigma=sigma,
-                          learning_rate=current_lr,
+                          learning_rate=initial_learning_rate,
                           neighborhood_function='gaussian',
                           random_seed=42)
         
-        self.hits = {}
-        self.request_count = 0
-        self.allocation_history = []
+        # Create VMs
+        self.vms = {}
+        vm_id = 0
+        for i in range(som_size):
+            for j in range(som_size):
+                self.vms[(i, j)] = VirtualMachine(
+                    id=vm_id,
+                    som_position=(i, j)
+                )
+                vm_id += 1
         
-        self.bmu_request_types = defaultdict(lambda: defaultdict(int))
-        
-        n_servers = len(servers)
-        self.server_groups = {
-            'small': list(range(0, n_servers // 3)),
-            'medium': list(range(n_servers // 3, 2 * n_servers // 3)),
-            'large': list(range(2 * n_servers // 3, n_servers))
-        }
+        self.time_step = 0
+        self.load_history = []
+        self.response_time_history = []
+        self.load_shift_events = []
         
         self._initial_training()
     
-    def _initial_training(self, n_samples: int = 100):
-        data = []
-        data.extend(np.random.beta(2, 5, (n_samples//3, 2)))
-        data.extend(np.random.beta(5, 5, (n_samples//3, 2)))
-        data.extend(np.random.beta(5, 2, (n_samples//3, 2)))
-        
-        data = np.array(data)
+    def _initial_training(self):
+        data = np.random.rand(100, 2)
         self.som.train_random(data, 500)
-        self.current_iteration += 500
     
-    def _get_current_learning_rate(self) -> float:
-        lr = self.initial_learning_rate * np.exp(-self.current_iteration / self.decay_constant)
-        lr = max(lr, self.min_learning_rate)
-        self.learning_rate_history.append((self.current_iteration, lr))
-        return lr
+    def _get_neighbors(self, pos: Tuple[int, int], radius: int = 1) -> List[Tuple[int, int]]:
+        x, y = pos
+        neighbors = []
+        
+        for dx in range(-radius, radius + 1):
+            for dy in range(-radius, radius + 1):
+                if dx == 0 and dy == 0:
+                    continue
+                nx, ny = x + dx, y + dy
+                if 0 <= nx < self.som_size and 0 <= ny < self.som_size:
+                    neighbors.append((nx, ny))
+        
+        return neighbors
     
-    def select_server(self, request: Request) -> Optional[Server]:
+    def _update_neighbor_activation(self):
+        """Update activation levels based on neighbor overload"""
+        new_activations = {}
+        
+        for pos, vm in self.vms.items():
+            # Check neighbor load
+            neighbors = self._get_neighbors(pos)
+            overloaded_neighbors = 0
+            total_neighbor_load = 0
+            
+            for n_pos in neighbors:
+                neighbor = self.vms[n_pos]
+                if neighbor.is_overloaded():
+                    overloaded_neighbors += 1
+                total_neighbor_load += neighbor.utilization
+            
+            # Calculate activation based on neighbor stress
+            if neighbors:
+                avg_neighbor_load = total_neighbor_load / len(neighbors)
+                vm.neighbor_load_factor = avg_neighbor_load
+                
+                # Activation increases with overloaded neighbors
+                activation_increase = (overloaded_neighbors / len(neighbors)) * self.neighbor_influence
+                vm.activation_level = min(1.0, vm.activation_level * 0.9 + activation_increase)
+            
+            new_activations[pos] = vm.activation_level
+        
+        return new_activations
+    
+    def select_vm(self, request: Request) -> Optional[VirtualMachine]:
         features = request.get_features()
+        bmu_pos = self.som.winner(features)
+        bmu_vm = self.vms[bmu_pos]
         
-        bmu = self.som.winner(features)
-        self.hits[bmu] = self.hits.get(bmu, 0) + 1
+        # Update neighbor activations
+        self._update_neighbor_activation()
         
-        self.bmu_request_types[bmu][request.size_category] += 1
+        # If BMU is overloaded, actively spread to neighbors
+        if bmu_vm.is_overloaded():
+            # Get neighbors sorted by activation level and current load
+            neighbors = self._get_neighbors(bmu_pos, radius=2)
+            candidates = []
+            
+            for n_pos in neighbors:
+                neighbor_vm = self.vms[n_pos]
+                if neighbor_vm.can_accept(request):
+                    # Score based on activation level and current load
+                    score = (1 - neighbor_vm.utilization) + neighbor_vm.activation_level * self.load_spread_factor
+                    candidates.append((score, neighbor_vm, n_pos))
+            
+            if candidates:
+                candidates.sort(key=lambda x: x[0], reverse=True)
+                selected_vm = candidates[0][1]
+                
+                # Record load shift event
+                self.load_shift_events.append({
+                    'time': self.time_step,
+                    'from_pos': bmu_pos,
+                    'to_pos': candidates[0][2],
+                    'reason': 'overload_spreading'
+                })
+                
+                return selected_vm
         
-        server = self._map_bmu_to_server(bmu, request)
+        # Normal selection if BMU not overloaded
+        elif bmu_vm.can_accept(request):
+            return bmu_vm
         
-        if server:
-            self.allocation_history.append({
-                'request_id': request.id,
-                'server_id': server.id,
-                'bmu': bmu,
-                'request_type': request.size_category,
-                'timestamp': time.time()
+        # Fallback: search in expanding radius
+        for radius in range(1, self.som_size // 2):
+            neighbors = self._get_neighbors(bmu_pos, radius)
+            
+            best_vm = None
+            best_score = -1
+            
+            for n_pos in neighbors:
+                neighbor_vm = self.vms[n_pos]
+                if neighbor_vm.can_accept(request):
+                    score = 1 - neighbor_vm.utilization
+                    if score > best_score:
+                        best_score = score
+                        best_vm = neighbor_vm
+            
+            if best_vm:
+                return best_vm
+        
+        return None
+    
+    def process_request(self, request: Request) -> Dict:
+        start_time = time.time()
+        
+        vm = self.select_vm(request)
+        
+        if vm:
+            # Add to queue
+            vm.request_queue.append(request)
+            
+            # Simulate processing
+            vm.cpu_usage += request.cpu_demand
+            vm.memory_usage += request.memory_demand
+            
+            # Calculate response time (queue wait + processing)
+            queue_wait = vm.queue_length * 10  # 10ms per queued request
+            response_time = queue_wait + request.processing_time
+            
+            vm.total_response_time += response_time
+            vm.completed_requests += 1
+            
+            return {
+                'success': True,
+                'vm_id': vm.id,
+                'vm_pos': vm.som_position,
+                'response_time': response_time,
+                'queue_length': vm.queue_length,
+                'utilization': vm.utilization
+            }
+        
+        return {'success': False}
+    
+    def simulate_processing(self):
+        """Simulate request completion and resource release"""
+        for vm in self.vms.values():
+            if vm.request_queue:
+                # Process some requests
+                processed = min(3, len(vm.request_queue))
+                for _ in range(processed):
+                    if vm.request_queue:
+                        req = vm.request_queue.popleft()
+                        # Release resources
+                        vm.cpu_usage = max(0, vm.cpu_usage - req.cpu_demand * 0.8)
+                        vm.memory_usage = max(0, vm.memory_usage - req.memory_demand * 0.8)
+    
+    def record_state(self):
+        """Record current system state for visualization"""
+        vm_states = []
+        
+        for pos, vm in self.vms.items():
+            vm_states.append({
+                'pos': pos,
+                'utilization': vm.utilization,
+                'queue_length': vm.queue_length,
+                'activation_level': vm.activation_level,
+                'avg_response_time': vm.avg_response_time,
+                'is_overloaded': vm.is_overloaded()
             })
-            
-            self.training_data.append(features)
-            self.request_count += 1
-            
-            if self.request_count % self.retrain_interval == 0:
-                self._retrain()
         
-        return server
+        self.load_history.append({
+            'time_step': self.time_step,
+            'vm_states': vm_states,
+            'avg_utilization': np.mean([s['utilization'] for s in vm_states]),
+            'max_queue_length': max([s['queue_length'] for s in vm_states]),
+            'overloaded_vms': sum([s['is_overloaded'] for s in vm_states])
+        })
+        
+        # Response time statistics
+        response_times = [vm.avg_response_time for vm in self.vms.values() if vm.completed_requests > 0]
+        if response_times:
+            self.response_time_history.append({
+                'time_step': self.time_step,
+                'avg_response_time': np.mean(response_times),
+                'p95_response_time': np.percentile(response_times, 95),
+                'max_response_time': np.max(response_times)
+            })
     
-    def _map_bmu_to_server(self, bmu: Tuple[int, int], request: Request) -> Optional[Server]:
-        available = [s for s in self.servers if s.can_handle(request)]
-        if not available:
-            return None
-        
-        if self.enable_specialization:
-            request_type = request.size_category
-            preferred_servers = [s for s in available if s.id in self.server_groups[request_type]]
-            candidates = preferred_servers if preferred_servers else available
-        else:
-            candidates = available
-        
-        scores = []
-        for server in candidates:
-            util_score = 1.0 - server.utilization
-            
-            specialization_score = 0.0
-            if server.request_count > 0:
-                same_type_ratio = server.handled_request_types[request.size_category] / server.request_count
-                specialization_score = same_type_ratio * 0.2
-            
-            grid_x, grid_y = bmu
-            if grid_x < self.som_size // 3:
-                bmu_type = 'small'
-            elif grid_x < 2 * self.som_size // 3:
-                bmu_type = 'medium'
-            else:
-                bmu_type = 'large'
-            
-            bmu_match_score = 0.1 if server.id in self.server_groups[bmu_type] else 0.0
-            
-            total_score = util_score + specialization_score + bmu_match_score
-            scores.append((total_score, server))
-        
-        scores.sort(key=lambda x: x[0], reverse=True)
-        return scores[0][1]
+    def step(self):
+        """Advance simulation by one time step"""
+        self.simulate_processing()
+        self.record_state()
+        self.time_step += 1
     
-    def _retrain(self):
-        if len(self.training_data) < 10:
-            return
+    def get_load_shift_matrix(self) -> np.ndarray:
+        """Get matrix showing load shifts between VMs"""
+        n = self.som_size * self.som_size
+        matrix = np.zeros((n, n))
         
-        current_lr = self._get_current_learning_rate()
-        self.som.learning_rate = current_lr
+        for event in self.load_shift_events:
+            from_vm = self.vms[event['from_pos']]
+            to_vm = self.vms[event['to_pos']]
+            matrix[from_vm.id, to_vm.id] += 1
         
-        data = np.array(self.training_data)
-        self.som.train_batch(data, num_iteration=50)
-        self.current_iteration += 50
+        return matrix
     
     def get_metrics(self) -> Dict:
-        server_utils = [s.utilization for s in self.servers]
+        """Get current system metrics"""
+        vm_utils = [vm.utilization for vm in self.vms.values()]
         
-        specialization_stats = {}
-        for category in ['small', 'medium', 'large']:
-            servers_in_group = self.server_groups[category]
-            total_requests = sum(self.servers[sid].request_count for sid in servers_in_group)
-            category_requests = sum(self.servers[sid].handled_request_types[category] for sid in servers_in_group)
-            specialization_stats[category] = {
-                'total_handled': total_requests,
-                'correct_type': category_requests,
-                'specialization_rate': category_requests / max(1, total_requests) * 100
-            }
-        
-        bmu_analysis = {}
-        for bmu, types in self.bmu_request_types.items():
-            dominant_type = max(types.items(), key=lambda x: x[1])[0] if types else 'unknown'
-            bmu_analysis[str(bmu)] = {
-                'dominant_type': dominant_type,
-                'type_distribution': dict(types)
-            }
+        # Communication/shift analysis
+        total_shifts = len(self.load_shift_events)
+        recent_shifts = len([e for e in self.load_shift_events 
+                           if e['time'] >= self.time_step - 10])
         
         return {
-            'request_count': self.request_count,
-            'current_lr': self._get_current_learning_rate(),
-            'active_neurons': len(self.hits),
-            'total_neurons': self.som_size ** 2,
-            'neuron_usage_rate': len(self.hits) / (self.som_size ** 2) * 100,
-            'server_utilization': {
-                'mean': np.mean(server_utils),
-                'std': np.std(server_utils),
-                'min': np.min(server_utils),
-                'max': np.max(server_utils)
+            'time_step': self.time_step,
+            'total_vms': len(self.vms),
+            'vm_utilization': {
+                'mean': np.mean(vm_utils),
+                'std': np.std(vm_utils),
+                'min': np.min(vm_utils),
+                'max': np.max(vm_utils)
             },
-            'load_balance_score': 1.0 - np.std(server_utils),
-            'most_active_neuron': max(self.hits.items(), key=lambda x: x[1]) if self.hits else None,
-            'specialization_stats': specialization_stats,
-            'bmu_analysis': bmu_analysis
+            'load_balance_score': 1.0 - np.std(vm_utils),
+            'overloaded_vms': sum(1 for vm in self.vms.values() if vm.is_overloaded()),
+            'avg_activation_level': np.mean([vm.activation_level for vm in self.vms.values()]),
+            'load_shifts': {
+                'total': total_shifts,
+                'recent': recent_shifts,
+                'rate': recent_shifts / 10 if self.time_step >= 10 else 0
+            },
+            'response_times': {
+                'avg': np.mean([vm.avg_response_time for vm in self.vms.values() if vm.completed_requests > 0]) if any(vm.completed_requests > 0 for vm in self.vms.values()) else 0,
+                'max_queue': max(vm.queue_length for vm in self.vms.values())
+            }
         }
-    
-    def get_weights(self) -> np.ndarray:
-        return self.som.get_weights()
-    
-    def get_hits(self) -> Dict[Tuple[int, int], int]:
-        return self.hits
-    
-    def get_learning_history(self) -> List[Tuple[int, float]]:
-        return self.learning_rate_history.copy()
-    
-    def print_debug_info(self):
-        print("\n=== SOM Load Balancer Debug Info ===")
-        print(f"Total Requests: {self.request_count}")
-        
-        print("\n--- BMU to Request Type Mapping ---")
-        for bmu, types in sorted(self.bmu_request_types.items())[:5]:
-            print(f"BMU {bmu}: {dict(types)}")
-        
-        print("\n--- Server Specialization ---")
-        for category, servers in self.server_groups.items():
-            print(f"\n{category.upper()} Servers (IDs {servers[0]}-{servers[-1]}):")
-            for sid in servers[:3]:
-                server = self.servers[sid]
-                if server.request_count > 0:
-                    print(f"  Server {sid}: {dict(server.handled_request_types)}")
-        
-        print("\n--- Success Metrics ---")
-        metrics = self.get_metrics()
-        for category, stats in metrics['specialization_stats'].items():
-            print(f"{category}: {stats['specialization_rate']:.1f}% specialization")

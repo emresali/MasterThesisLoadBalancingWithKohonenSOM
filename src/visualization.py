@@ -1,295 +1,216 @@
 import numpy as np
 import matplotlib.pyplot as plt
+import matplotlib.animation as animation
+from matplotlib.patches import FancyArrowPatch
 import seaborn as sns
-from matplotlib.patches import RegularPolygon
-from pathlib import Path
-from typing import Dict, List, Any, Optional
-import matplotlib.gridspec as gridspec
-
-plt.style.use('seaborn-v0_8-paper')
-sns.set_palette("husl")
+from typing import List, Dict
+import networkx as nx
 
 class SOMVisualizer:
-    def __init__(self, save_dir: str = "data/plots", dpi: int = 300):
-        self.save_dir = Path(save_dir)
-        self.save_dir.mkdir(parents=True, exist_ok=True)
-        self.dpi = dpi
+    def __init__(self, balancer):
+        self.balancer = balancer
+        self.som_size = balancer.som_size
         
-    def create_comprehensive_analysis(self, balancer, filename: str = "som_analysis.png"):
-        fig = plt.figure(figsize=(12, 8), constrained_layout=True)
-        gs = gridspec.GridSpec(3, 3, figure=fig)
+    def create_load_animation(self, save_path: str = "load_shift_animation.gif"):
+        """Create animation showing load shifts over time"""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
         
-        ax_hex = fig.add_subplot(gs[0:2, 0:2])
-        self._plot_hexagonal_som(ax_hex, balancer)
+        def update(frame):
+            if frame >= len(self.balancer.load_history):
+                return
+            
+            state = self.balancer.load_history[frame]
+            
+            # Clear axes
+            for ax in [ax1, ax2, ax3, ax4]:
+                ax.clear()
+            
+            # 1. Load heatmap with activation levels
+            self._plot_load_heatmap(ax1, state)
+            
+            # 2. Response time heatmap
+            self._plot_response_time_heatmap(ax2, state)
+            
+            # 3. Queue lengths bar chart
+            self._plot_queue_lengths(ax3, state)
+            
+            # 4. Load shift arrows
+            self._plot_load_shifts(ax4, frame)
+            
+            fig.suptitle(f'Load Balancing Dynamics - Step {frame}', fontsize=14)
         
-        ax_lr = fig.add_subplot(gs[0, 2])
-        self._plot_learning_rate(ax_lr, balancer)
-        
-        ax_util = fig.add_subplot(gs[1, 2])
-        self._plot_server_utilization(ax_util, balancer)
-        
-        ax_neuron = fig.add_subplot(gs[2, 0])
-        self._plot_neuron_distribution(ax_neuron, balancer)
-        
-        ax_balance = fig.add_subplot(gs[2, 1])
-        self._plot_load_balance(ax_balance, balancer)
-        
-        ax_metrics = fig.add_subplot(gs[2, 2])
-        self._plot_key_metrics(ax_metrics, balancer)
-        
-        save_path = self.save_dir / filename
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        
-        plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+        anim = animation.FuncAnimation(fig, update, frames=len(self.balancer.load_history),
+                                     interval=200, blit=False)
+        anim.save(save_path, writer='pillow')
         plt.close()
     
-    def _plot_hexagonal_som(self, ax, balancer):
-        size = balancer.som_size
-        weights = balancer.get_weights()
-        hits = balancer.get_hits()
+    def _plot_load_heatmap(self, ax, state):
+        """Plot VM utilization with activation overlay"""
+        util_grid = np.zeros((self.som_size, self.som_size))
+        activation_grid = np.zeros((self.som_size, self.som_size))
         
-        u_matrix = self._calculate_umatrix(weights)
+        for vm_state in state['vm_states']:
+            pos = vm_state['pos']
+            util_grid[pos] = vm_state['utilization']
+            activation_grid[pos] = vm_state['activation_level']
         
-        for i in range(size):
-            for j in range(size):
-                x = j * 1.5
-                y = i * np.sqrt(3)
-                if i % 2 == 1:
-                    x += 0.75
-                
-                val = u_matrix[i, j]
-                normalized_val = (val - u_matrix.min()) / (u_matrix.max() - u_matrix.min() + 1e-8)
-                
-                hit_count = hits.get((i, j), 0)
-                radius = 0.4 + 0.5 * min(hit_count / max(hits.values() or [1]), 1.0)
-                
-                hex = RegularPolygon((x, y), 6, radius=radius,
-                                   facecolor=plt.cm.viridis(normalized_val),
-                                   edgecolor='white', linewidth=0.5)
-                ax.add_patch(hex)
-                
-                if hit_count > 0:
-                    ax.text(x, y, str(hit_count), ha='center', va='center',
-                           fontsize=6, color='white' if normalized_val > 0.5 else 'black')
+        # Plot utilization as heatmap
+        im = ax.imshow(util_grid, cmap='YlOrRd', vmin=0, vmax=1)
         
-        ax.set_xlim(-1, size * 1.5)
-        ax.set_ylim(-1, size * np.sqrt(3))
-        ax.set_aspect('equal')
-        ax.axis('off')
-        ax.set_title('SOM Topology (U-Matrix + Hits)', fontsize=10, fontweight='bold')
+        # Overlay activation as circles
+        for i in range(self.som_size):
+            for j in range(self.som_size):
+                if activation_grid[i, j] > 0.1:
+                    circle = plt.Circle((j, i), activation_grid[i, j] * 0.4, 
+                                      color='blue', alpha=0.3)
+                    ax.add_patch(circle)
+        
+        ax.set_title('VM Load (color) + Activation (blue circles)')
+        ax.set_xlabel('SOM X')
+        ax.set_ylabel('SOM Y')
+        
+    def _plot_response_time_heatmap(self, ax, state):
+        """Plot response times across VMs"""
+        rt_grid = np.zeros((self.som_size, self.som_size))
+        
+        for vm_state in state['vm_states']:
+            pos = vm_state['pos']
+            rt_grid[pos] = vm_state['avg_response_time']
+        
+        sns.heatmap(rt_grid, ax=ax, cmap='viridis', 
+                   cbar_kws={'label': 'Avg Response Time (ms)'})
+        ax.set_title('Response Time Distribution')
+        
+    def _plot_queue_lengths(self, ax, state):
+        """Bar chart of queue lengths"""
+        positions = []
+        queue_lengths = []
+        colors = []
+        
+        for vm_state in state['vm_states']:
+            if vm_state['queue_length'] > 0:
+                positions.append(f"{vm_state['pos'][0]},{vm_state['pos'][1]}")
+                queue_lengths.append(vm_state['queue_length'])
+                colors.append('red' if vm_state['is_overloaded'] else 'blue')
+        
+        if positions:
+            ax.bar(range(len(positions)), queue_lengths, color=colors)
+            ax.set_xticks(range(len(positions)))
+            ax.set_xticklabels(positions, rotation=45)
+            ax.set_ylabel('Queue Length')
+            ax.set_title('Request Queues (red=overloaded)')
+        else:
+            ax.text(0.5, 0.5, 'No queued requests', ha='center', va='center')
+            ax.set_title('Request Queues')
+        
+    def _plot_load_shifts(self, ax, current_frame):
+        """Show load shift events as arrows"""
+        # Get recent load shifts
+        recent_shifts = [e for e in self.balancer.load_shift_events 
+                        if current_frame - 10 <= e['time'] <= current_frame]
+        
+        # Create grid positions
+        for i in range(self.som_size):
+            for j in range(self.som_size):
+                ax.plot(j, i, 'o', color='lightgray', markersize=20)
+                ax.text(j, i, f"{i},{j}", ha='center', va='center', fontsize=8)
+        
+        # Draw arrows for load shifts
+        for shift in recent_shifts:
+            from_pos = shift['from_pos']
+            to_pos = shift['to_pos']
+            
+            # Calculate arrow properties
+            alpha = 1 - (current_frame - shift['time']) / 10  # Fade out
+            
+            arrow = FancyArrowPatch(
+                (from_pos[1], from_pos[0]),
+                (to_pos[1], to_pos[0]),
+                arrowstyle='->', mutation_scale=20,
+                color='red', alpha=alpha, linewidth=2
+            )
+            ax.add_patch(arrow)
+        
+        ax.set_xlim(-0.5, self.som_size - 0.5)
+        ax.set_ylim(-0.5, self.som_size - 0.5)
+        ax.invert_yaxis()
+        ax.set_title(f'Load Shifts (last 10 steps)')
+        ax.set_xlabel('SOM X')
+        ax.set_ylabel('SOM Y')
     
-    def _plot_learning_rate(self, ax, balancer):
-        history = balancer.get_learning_history()
-        if not history:
-            return
+    def create_analysis_plots(self, save_path: str = "load_analysis.png"):
+        """Create static analysis plots"""
+        fig, ((ax1, ax2), (ax3, ax4)) = plt.subplots(2, 2, figsize=(12, 10))
         
-        iterations, rates = zip(*history)
-        ax.semilogy(iterations, rates, 'b-', linewidth=2)
-        ax.axhline(y=balancer.min_learning_rate, color='r', linestyle='--', 
-                   linewidth=1, alpha=0.7)
-        ax.set_xlabel('Iteration', fontsize=8)
-        ax.set_ylabel('Learning Rate', fontsize=8)
-        ax.set_title('Adaptive α(t)', fontsize=10, fontweight='bold')
-        ax.grid(True, alpha=0.3)
-        ax.tick_params(axis='both', labelsize=7)
-    
-    def _plot_server_utilization(self, ax, balancer):
-        utils = [s.utilization * 100 for s in balancer.servers]
-        server_ids = [s.id for s in balancer.servers]
+        # 1. Load balance over time
+        times = [s['time_step'] for s in self.balancer.load_history]
+        avg_utils = [s['avg_utilization'] for s in self.balancer.load_history]
+        overloaded = [s['overloaded_vms'] for s in self.balancer.load_history]
         
-        bars = ax.bar(server_ids, utils, color=sns.color_palette("husl", len(utils)))
+        ax1.plot(times, avg_utils, 'b-', label='Avg Utilization')
+        ax1_twin = ax1.twinx()
+        ax1_twin.plot(times, overloaded, 'r-', label='Overloaded VMs')
+        ax1.set_xlabel('Time Step')
+        ax1.set_ylabel('Avg Utilization', color='b')
+        ax1_twin.set_ylabel('Overloaded VMs', color='r')
+        ax1.set_title('System Load Evolution')
+        ax1.grid(True, alpha=0.3)
         
-        mean_util = np.mean(utils)
-        ax.axhline(y=mean_util, color='red', linestyle='--', linewidth=2, alpha=0.7)
+        # 2. Response time evolution
+        if self.balancer.response_time_history:
+            rt_times = [s['time_step'] for s in self.balancer.response_time_history]
+            avg_rt = [s['avg_response_time'] for s in self.balancer.response_time_history]
+            p95_rt = [s['p95_response_time'] for s in self.balancer.response_time_history]
+            
+            ax2.plot(rt_times, avg_rt, 'g-', label='Average')
+            ax2.plot(rt_times, p95_rt, 'r--', label='P95')
+            ax2.set_xlabel('Time Step')
+            ax2.set_ylabel('Response Time (ms)')
+            ax2.set_title('Response Time Evolution')
+            ax2.legend()
+            ax2.grid(True, alpha=0.3)
         
-        ax.set_xlabel('Server ID', fontsize=8)
-        ax.set_ylabel('Utilization (%)', fontsize=8)
-        ax.set_title('Server Load Distribution', fontsize=10, fontweight='bold')
-        ax.set_ylim(0, 100)
-        ax.tick_params(axis='both', labelsize=7)
+        # 3. Load shift frequency heatmap
+        shift_matrix = self.balancer.get_load_shift_matrix()
+        if shift_matrix.max() > 0:
+            sns.heatmap(shift_matrix[:20, :20], ax=ax3, cmap='Blues',
+                       cbar_kws={'label': 'Shift Count'})
+            ax3.set_title('Load Shift Patterns (first 20 VMs)')
+            ax3.set_xlabel('To VM')
+            ax3.set_ylabel('From VM')
         
-        ax.text(0.95, 0.95, f'σ = {np.std(utils):.1f}%', 
-                transform=ax.transAxes, ha='right', va='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
-                fontsize=8)
-    
-    def _plot_neuron_distribution(self, ax, balancer):
-        hits_values = list(balancer.get_hits().values())
-        if not hits_values:
-            return
+        # 4. Neighbor activation correlation
+        final_state = self.balancer.load_history[-1] if self.balancer.load_history else None
+        if final_state:
+            self._plot_neighbor_correlation(ax4, final_state)
         
-        ax.hist(hits_values, bins=20, color='skyblue', edgecolor='black', alpha=0.7)
-        ax.set_xlabel('Hit Count', fontsize=8)
-        ax.set_ylabel('# Neurons', fontsize=8)
-        ax.set_title('Neuron Activity', fontsize=10, fontweight='bold')
-        ax.tick_params(axis='both', labelsize=7)
-    
-    def _plot_load_balance(self, ax, balancer):
-        metrics = balancer.get_metrics()
-        utils = [s.utilization for s in balancer.servers]
-        
-        # Load distribution over time would be more useful
-        ax.boxplot(utils, vert=True, patch_artist=True,
-                   boxprops=dict(facecolor='lightblue', alpha=0.7),
-                   medianprops=dict(color='red', linewidth=2))
-        
-        ax.set_ylabel('Server Utilization', fontsize=8)
-        ax.set_title('Load Distribution', fontsize=10, fontweight='bold')
-        ax.set_xticklabels(['All Servers'])
-        ax.grid(axis='y', alpha=0.3)
-        
-        # Add statistics text
-        ax.text(0.95, 0.95, f'Balance Score: {metrics["load_balance_score"]:.3f}\nStd Dev: {np.std(utils):.3f}', 
-                transform=ax.transAxes, ha='right', va='top',
-                bbox=dict(boxstyle='round', facecolor='white', alpha=0.8),
-                fontsize=7)
-    
-    def _plot_key_metrics(self, ax, balancer):
-        metrics = balancer.get_metrics()
-        
-        ax.axis('off')
-        text = f"""Performance Metrics:
-        
-Requests: {metrics['request_count']}
-Active Neurons: {metrics['active_neurons']}/{metrics['total_neurons']}
-Neuron Usage: {metrics['neuron_usage_rate']:.1f}%
-Load Balance: {metrics['load_balance_score']:.3f}
-Current α: {metrics['current_lr']:.4f}
-        """
-        
-        ax.text(0.1, 0.9, text, transform=ax.transAxes, 
-                verticalalignment='top', fontfamily='monospace',
-                fontsize=8, bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
-    
-    def _calculate_umatrix(self, weights):
-        size = weights.shape[0]
-        u_matrix = np.zeros((size, size))
-        
-        for i in range(size):
-            for j in range(size):
-                neighbors = []
-                for di, dj in [(-1,0), (1,0), (0,-1), (0,1)]:
-                    ni, nj = i + di, j + dj
-                    if 0 <= ni < size and 0 <= nj < size:
-                        dist = np.linalg.norm(weights[i,j] - weights[ni,nj])
-                        neighbors.append(dist)
-                u_matrix[i,j] = np.mean(neighbors) if neighbors else 0
-        
-        return u_matrix
-
-    
-    def create_comparison_matrix(self, results: Dict[str, Dict], filename: str = "comparison_matrix.png"):
-        configs = list(results.keys())
-        metrics = ['success_rate', 'load_std', 'neuron_usage', 'response_time']
-        
-        matrix = np.zeros((len(configs), len(metrics)))
-        for i, config in enumerate(configs):
-            for j, metric in enumerate(metrics):
-                if metric in results[config]:
-                    matrix[i, j] = results[config][metric]
-        
-        for j in range(len(metrics)):
-            col = matrix[:, j]
-            if col.max() > col.min():
-                matrix[:, j] = (col - col.min()) / (col.max() - col.min())
-        
-        fig, ax = plt.subplots(figsize=(8, 6))
-        sns.heatmap(matrix, annot=True, fmt='.2f', cmap='YlOrRd',
-                    xticklabels=metrics, yticklabels=configs,
-                    cbar_kws={'label': 'Normalized Score'})
-        
-        ax.set_title('Configuration Performance Matrix', fontsize=12, fontweight='bold')
+        plt.suptitle('Load Balancing Analysis - Neighbor Activation Effects')
         plt.tight_layout()
-        
-        save_path = self.save_dir / filename
-        save_path.parent.mkdir(parents=True, exist_ok=True)
-        plt.savefig(save_path, dpi=self.dpi, bbox_inches='tight')
+        plt.savefig(save_path, dpi=300, bbox_inches='tight')
         plt.close()
-
-def create_configuration_comparison(results: Dict[str, Dict[str, Any]], configs: List[Dict[str, Any]]):
-    save_dir = Path("data/plots")
-    save_dir.mkdir(parents=True, exist_ok=True)
     
-    fig, axes = plt.subplots(2, 3, figsize=(15, 10))
-    fig.suptitle('SOM Configuration Comparison', fontsize=16, fontweight='bold')
-    
-    workloads = ['uniform', 'bursty', 'mixed']
-    config_names = [c['name'] for c in configs]
-    colors = ['blue', 'red', 'green', 'orange'][:len(configs)]
-    
-    def plot_bars(ax, metric, ylabel, title):
-        x = np.arange(len(workloads))
-        width = 0.8 / len(configs)
+    def _plot_neighbor_correlation(self, ax, state):
+        """Plot correlation between neighbor load and activation"""
+        utils = []
+        activations = []
         
-        for i, name in enumerate(config_names):
-            values = [results[name][w][metric] for w in workloads]
-            ax.bar(x + i*width, values, width, label=name, color=colors[i], alpha=0.7)
+        for vm_state in state['vm_states']:
+            utils.append(vm_state['utilization'])
+            activations.append(vm_state['activation_level'])
         
-        ax.set_ylabel(ylabel)
-        ax.set_title(title)
-        ax.set_xticks(x + width*(len(configs)-1)/2)
-        ax.set_xticklabels(workloads)
-        ax.legend()
-        ax.grid(axis='y', alpha=0.3)
+        ax.scatter(utils, activations, alpha=0.6)
+        ax.set_xlabel('VM Utilization')
+        ax.set_ylabel('Activation Level')
+        ax.set_title('Utilization vs Neighbor Activation')
+        
+        # Add trend line
+        if len(utils) > 1:
+            z = np.polyfit(utils, activations, 1)
+            p = np.poly1d(z)
+            ax.plot(sorted(utils), p(sorted(utils)), "r--", alpha=0.8)
+        
+        ax.grid(True, alpha=0.3)
     
-    plot_bars(axes[0, 0], 'success_rate', 'Success Rate (%)', 'Success Rate by Workload')
-    
-    ax = axes[0, 1]
-    for i, name in enumerate(config_names):
-        values = [results[name][w]['load_std'] for w in workloads]
-        ax.plot(workloads, values, 'o-', label=name, color=colors[i], linewidth=2, markersize=8)
-    ax.set_ylabel('Load STD')
-    ax.set_title('Load Balance Quality (Lower is Better)')
-    ax.legend()
-    ax.grid(alpha=0.3)
-    
-    plot_bars(axes[0, 2], 'neuron_usage', 'Neuron Usage (%)', 'SOM Neuron Utilization')
-    
-    for idx, (workload, ylabel) in enumerate([('uniform', 'Load STD'), ('bursty', 'Average Load')]):
-        ax = axes[1, idx]
-        for i, name in enumerate(config_names):
-            history = results[name][workload]['history']
-            steps = [h['step'] for h in history]
-            values = [h['std'] if idx == 0 else h['mean'] for h in history]
-            ax.plot(steps, values, label=name, color=colors[i], linewidth=2)
-        ax.set_xlabel('Request Number')
-        ax.set_ylabel(ylabel)
-        ax.set_title(f'Load Evolution - {workload.capitalize()}')
-        ax.legend()
-        ax.grid(alpha=0.3)
-    
-    ax = axes[1, 2]
-    ax.axis('off')
-    
-    scores = {}
-    for name in config_names:
-        score = sum(
-            results[name][w]['success_rate'] * 0.4 + 
-            results[name][w]['load_balance_score'] * 100 * 0.4 + 
-            results[name][w]['neuron_usage'] * 0.2
-            for w in workloads
-        ) / len(workloads)
-        scores[name] = score
-    
-    summary = "Configuration Summary:\n\n"
-    for config in configs:
-        name = config['name']
-        summary += f"{name}:\n"
-        summary += f"  Size: {config['som_size']}×{config['som_size']}, "
-        summary += f"LR: {config.get('learning_rate', 'adaptive')}, σ: {config['sigma']}\n"
-        summary += f"  Score: {scores[name]:.1f}/100\n\n"
-    
-    winner = max(scores, key=scores.get)
-    summary += f"Best: {winner}"
-    
-    ax.text(0.1, 0.9, summary, transform=ax.transAxes, 
-            verticalalignment='top', fontsize=10, fontfamily='monospace',
-            bbox=dict(boxstyle='round', facecolor='lightgray', alpha=0.8))
-    
-    plt.tight_layout()
-    plt.savefig(save_dir / 'configuration_comparison.png', dpi=300, bbox_inches='tight')
-    plt.close()
-
-def create_quick_analysis(balancer, prefix: str = "analysis"):
-    viz = SOMVisualizer()
-    viz.create_comprehensive_analysis(balancer, f"{prefix}_results.png")
+    def create_comprehensive_analysis(self, filename: str = "som_analysis.png"):
+        """Create comprehensive analysis similar to original but for VMs"""
+        self.create_analysis_plots(filename)
