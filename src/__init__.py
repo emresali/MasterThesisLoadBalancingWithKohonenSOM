@@ -1,4 +1,4 @@
-from .som_balancer import SOMLoadBalancer, Server, Request
+from .som_balancer import SOMLoadBalancer, VirtualMachine, Request
 from .visualization import SOMVisualizer
 
-__all__ = ['SOMLoadBalancer', 'Server', 'Request', 'SOMVisualizer']
+__all__ = ['SOMLoadBalancer', 'VirtualMachine', 'Request', 'SOMVisualizer']
